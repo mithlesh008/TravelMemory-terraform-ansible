@@ -88,6 +88,12 @@ Do not leave the example `0.0.0.0/0` SSH range open for a secured deployment. Th
 terraform init
 terraform fmt
 terraform validate
+```
+
+<img width="999" height="831" alt="Screenshot 2026-10-25 at 1 38 36 PM" src="https://github.com/user-attachments/assets/4899221e-a054-4326-806b-5fff17e82394" />
+
+
+```bash
 terraform plan
 terraform apply
 ```
@@ -185,6 +191,11 @@ Validate and deploy:
 ansible-playbook site.yml --syntax-check --ask-vault-pass
 ansible-playbook site.yml --ask-vault-pass
 ```
+<img width="1253" height="465" alt="Screenshot 2026-10-25 at 2 12 21 PM" src="https://github.com/user-attachments/assets/d69f12a8-0102-48ef-8f6f-8e85550eba99" />
+
+<img width="1254" height="106" alt="Screenshot 2026-10-25 at 2 05 52 PM" src="https://github.com/user-attachments/assets/cf693cde-ce93-4961-8981-dcfe5a027593" />
+
+<img width="1706" height="468" alt="Screenshot 2026-10-25 at 2 19 57 PM" src="https://github.com/user-attachments/assets/2143efef-2d03-4ca5-8950-a3ec75f43711" />
 
 The final recap should show `failed=0` and `unreachable=0` for both hosts. The playbook configures MongoDB, deploys the application, starts the backend and Nginx, and configures firewalls.
 
@@ -199,6 +210,9 @@ terraform output -raw web_url
 
 Open that URL in your Mac's browser. Create a sample travel memory and confirm it is still displayed after refreshing.
 
+<img width="1895" height="987" alt="Screenshot 2026-10-25 at 2 20 59 PM" src="https://github.com/user-attachments/assets/02229801-76f6-4579-8fb1-11ea1374fde1" />
+
+
 For service checks, SSH to the web instance:
 
 ```bash
@@ -208,6 +222,9 @@ sudo nginx -t
 curl -i http://localhost/api/trip
 exit
 ```
+
+<img width="1728" height="888" alt="Screenshot 2026-10-25 at 2 21 56 PM" src="https://github.com/user-attachments/assets/9c9316cb-10c5-4b71-8ad3-88d847ce1fe8" />
+
 
 Use your application's actual route if it differs from `/trip`. After `exit`, check MongoDB from the controller:
 
