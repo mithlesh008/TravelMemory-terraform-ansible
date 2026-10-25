@@ -1,0 +1,8 @@
+repo_url: "https://github.com/<Replace-with-user-name>/TravelMemory-terraform-ansible.git"
+app_root: "/opt/TravelMemory"
+app_user: "ec2-user"
+node_major: "20"
+admin_ip: "0.0.0.0/0"
+mongo_database: "travelmemory"
+mongo_app_user: "travelmemory_app"
+mongo_admin_user: "mongo_admin"

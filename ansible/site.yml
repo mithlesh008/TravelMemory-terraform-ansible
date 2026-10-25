@@ -1,0 +1,287 @@
+- name: Configure MongoDB
+  hosts: db
+  become: true
+  vars:
+    web_private_ip: "{{ hostvars['web']['private_ip'] }}"
+  tasks:
+    - name: Install MongoDB and firewall packages
+      ansible.builtin.dnf:
+        name:
+          - ca-certificates
+          - firewalld
+        state: present
+        update_cache: true
+
+    - name: Configure MongoDB repository
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/mongodb-org-8.0.repo
+        mode: "0644"
+        content: |
+          [mongodb-org-8.0]
+          name=MongoDB Repository
+          baseurl=https://repo.mongodb.org/yum/amazon/2023/mongodb-org/8.0/x86_64/
+          gpgcheck=1
+          enabled=1
+          gpgkey=https://pgp.mongodb.com/server-8.0.asc
+
+    - name: Install MongoDB
+      ansible.builtin.dnf:
+        name: mongodb-org
+        state: present
+        update_cache: true
+
+    - name: Start MongoDB
+      ansible.builtin.systemd:
+        name: mongod
+        state: started
+        enabled: true
+
+    - name: Wait for MongoDB
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 27017
+
+    - name: Create MongoDB users
+      ansible.builtin.shell: |
+        if grep -q 'authorization: enabled' /etc/mongod.conf; then
+          AUTH="--username {{ mongo_admin_user }} --password {{ mongo_admin_password }} --authenticationDatabase admin"
+        else
+          AUTH=""
+        fi
+        mongosh --quiet --host 127.0.0.1 $AUTH --eval "
+        const admin=db.getSiblingDB('admin');
+        if (!admin.getUser('{{ mongo_admin_user }}')) admin.createUser({user:'{{ mongo_admin_user }}',pwd:'{{ mongo_admin_password }}',roles:[{role:'root',db:'admin'}]});
+        const app=db.getSiblingDB('{{ mongo_database }}');
+        if (!app.getUser('{{ mongo_app_user }}')) app.createUser({user:'{{ mongo_app_user }}',pwd:'{{ mongo_app_password }}',roles:[{role:'readWrite',db:'{{ mongo_database }}'}]});"
+      no_log: true
+      changed_when: false
+
+    - name: Configure MongoDB
+      ansible.builtin.copy:
+        dest: /etc/mongod.conf
+        mode: "0644"
+        content: |
+          storage:
+            dbPath: /var/lib/mongo
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+          net:
+            port: 27017
+            bindIp: 127.0.0.1,{{ ansible_default_ipv4.address }}
+          security:
+            authorization: enabled
+      notify: Restart MongoDB
+
+    - name: Start firewalld
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Remove default SSH rule
+      ansible.posix.firewalld:
+        zone: public
+        service: ssh
+        permanent: true
+        immediate: true
+        state: disabled
+
+    - name: Allow SSH from web server
+      ansible.posix.firewalld:
+        zone: public
+        rich_rule: 'rule family="ipv4" source address="{{ web_private_ip }}/32" service name="ssh" accept'
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Allow MongoDB from web server
+      ansible.posix.firewalld:
+        zone: public
+        rich_rule: 'rule family="ipv4" source address="{{ web_private_ip }}/32" port port="27017" protocol="tcp" accept'
+        permanent: true
+        immediate: true
+        state: enabled
+  handlers:
+    - name: Restart MongoDB
+      ansible.builtin.systemd:
+        name: mongod
+        state: restarted
+
+- name: Deploy TravelMemory
+  hosts: web
+  become: true
+  tasks:
+    - name: Install web packages
+      ansible.builtin.dnf:
+        name: [ca-certificates, git, nginx, rsync, firewalld, "nodejs{{ node_major }}", "nodejs{{ node_major }}-npm"]
+        state: present
+        update_cache: true
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_root }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0755"
+
+    - name: Clone TravelMemory
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_root }}"
+        version: main
+        force: true
+      become_user: "{{ app_user }}"
+
+    - name: Configure backend environment
+      ansible.builtin.copy:
+        dest: "{{ app_root }}/backend/.env"
+        owner: "{{ app_user }}"
+        mode: "0600"
+        content: |
+          MONGO_URI=mongodb://{{ mongo_app_user }}:{{ mongo_app_password }}@{{ hostvars['db']['ansible_host'] }}:27017/{{ mongo_database }}?authSource={{ mongo_database }}
+          PORT=3001
+      no_log: true
+
+    - name: Configure frontend environment
+      ansible.builtin.copy:
+        dest: "{{ app_root }}/frontend/.env"
+        owner: "{{ app_user }}"
+        mode: "0644"
+        content: |
+          REACT_APP_BACKEND_URL=/api
+
+    - name: Install backend dependencies
+      ansible.builtin.command: npm install
+      args:
+        chdir: "{{ app_root }}/backend"
+      become_user: "{{ app_user }}"
+
+    - name: Install frontend dependencies
+      ansible.builtin.command: npm install --legacy-peer-deps
+      args:
+        chdir: "{{ app_root }}/frontend"
+      become_user: "{{ app_user }}"
+
+    - name: Build frontend
+      ansible.builtin.command: npm run build
+      args:
+        chdir: "{{ app_root }}/frontend"
+      become_user: "{{ app_user }}"
+
+    - name: Publish frontend
+      ansible.builtin.shell: |
+        mkdir -p /var/www/travelmemory
+        rsync -a --delete {{ app_root }}/frontend/build/ /var/www/travelmemory/
+
+    - name: Configure backend service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/travelmemory-backend.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=TravelMemory backend
+          After=network.target
+          [Service]
+          User={{ app_user }}
+          WorkingDirectory={{ app_root }}/backend
+          EnvironmentFile={{ app_root }}/backend/.env
+          ExecStart=/usr/bin/node index.js
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart backend
+
+    - name: Configure Nginx
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/travelmemory.conf
+        mode: "0644"
+        content: |
+          server {
+            listen 80 default_server;
+            server_name _;
+            root /var/www/travelmemory;
+            index index.html;
+            location /api/ {
+              proxy_pass http://127.0.0.1:3001/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            }
+            location / { try_files $uri $uri/ /index.html; }
+          }
+      notify: Restart Nginx
+
+    - name: Remove default Nginx configuration
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d/default.conf
+        state: absent
+      notify: Restart Nginx
+
+    - name: Enable backend and Nginx
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: [travelmemory-backend, nginx]
+
+    - name: Start firewalld
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Remove default SSH rule
+      ansible.posix.firewalld:
+        zone: public
+        service: ssh
+        permanent: true
+        immediate: true
+        state: disabled
+
+    - name: Allow administrator SSH
+      ansible.posix.firewalld:
+        zone: public
+        rich_rule: 'rule family="ipv4" source address="{{ admin_ip }}" service name="ssh" accept'
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Allow HTTP
+      ansible.posix.firewalld:
+        zone: public
+        service: http
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Disable SSH password authentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: PasswordAuthentication no
+      notify: Restart SSH
+
+    - name: Disable root SSH login
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: PermitRootLogin no
+      notify: Restart SSH
+  handlers:
+    - name: Restart backend
+      ansible.builtin.systemd:
+        name: travelmemory-backend
+        state: restarted
+        daemon_reload: true
+    - name: Restart Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+    - name: Restart SSH
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

@@ -128,3 +128,22 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Deployment secrets and generated state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+**/inventory.ini
+**/vault.yml
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+travelmemory
+travelmemory.pub
+crash.log

@@ -1,0 +1,4 @@
+aws_region     = "ap-south-1"
+ami_id        = "ami-REPLACE_WITH_YOUR_AMAZON_LINUX_2023_AMI"
+admin_cidr    = "0.0.0.0/0"
+public_key_path = "~/.ssh/travelmemory.pub"
